@@ -161,7 +161,14 @@ def _build_court_case(
     filing_date = _parse_date(result.get("filing_date")) or date.today()
     court_type = _normalize_court_type(result.get("court_type"))
     deadline = _calculate_deadline(filing_date, court_type)
-    enrichment = _optional_enrichment(client, watch_entry, result)
+    enrichment = _optional_enrichment(
+        client,
+        watch_entry,
+        result,
+        filing_date=filing_date,
+        court_type=court_type,
+        deadline=deadline,
+    )
 
     return CourtCase(
         id=str(uuid4()),
@@ -178,6 +185,13 @@ def _build_court_case(
         days_remaining=deadline.get("days_remaining"),
         is_time_barred=enrichment.get("is_time_barred"),
         collector_win_rate=enrichment.get("collector_win_rate"),
+        default_risk_score=enrichment.get("default_risk_score"),
+        risk_confidence=enrichment.get("risk_confidence"),
+        plaintiff_strength=enrichment.get("plaintiff_strength"),
+        alert_importance=enrichment.get("alert_importance"),
+        pattern_description=enrichment.get("pattern_description"),
+        pattern_severity=enrichment.get("pattern_severity"),
+        anomaly_score=enrichment.get("anomaly_score"),
         status="active",
     )
 
@@ -209,11 +223,23 @@ def _calculate_deadline(filing_date: date, court_type: Any) -> dict[str, Any]:
 
 
 def _optional_enrichment(
-    client: Client, watch_entry: WatchEntry, result: dict[str, Any]
+    client: Client,
+    watch_entry: WatchEntry,
+    result: dict[str, Any],
+    filing_date: date,
+    court_type: str,
+    deadline: dict[str, Any],
 ) -> dict[str, Any]:
     enrichment: dict[str, Any] = {
         "is_time_barred": None,
         "collector_win_rate": None,
+        "default_risk_score": None,
+        "risk_confidence": None,
+        "plaintiff_strength": None,
+        "alert_importance": None,
+        "pattern_description": None,
+        "pattern_severity": None,
+        "anomaly_score": None,
     }
 
     _try_limitations_enrichment(enrichment, result)
@@ -223,7 +249,14 @@ def _optional_enrichment(
         county=watch_entry.county,
     )
     _try_collector_enrichment(enrichment, result, historical_cases)
-    _try_future_layer_enrichment(result, historical_cases)
+    _try_future_layer_enrichment(
+        enrichment,
+        result,
+        historical_cases,
+        filing_date=filing_date,
+        court_type=court_type,
+        deadline=deadline,
+    )
 
     return enrichment
 
@@ -289,7 +322,12 @@ def _try_collector_enrichment(
 
 
 def _try_future_layer_enrichment(
-    result: dict[str, Any], historical_cases: list[dict]
+    enrichment: dict[str, Any],
+    result: dict[str, Any],
+    historical_cases: list[dict],
+    filing_date: date,
+    court_type: str,
+    deadline: dict[str, Any],
 ) -> None:
     risk_scorer = _load_optional_callable("backend.layer2_risk.risk_model", "score_risk")
     pattern_detector = _load_optional_callable(
@@ -300,14 +338,42 @@ def _try_future_layer_enrichment(
     if risk_scorer is None:
         print("[court_monitor] risk_model unavailable; skipping")
     else:
-        print("[court_monitor] risk_model available; waiting for B3 integration contract")
+        try:
+            risk = risk_scorer(
+                {
+                    **result,
+                    "filing_date": filing_date,
+                    "court_type": court_type,
+                    "days_remaining": deadline.get("days_remaining"),
+                    "is_time_barred": enrichment.get("is_time_barred"),
+                    "collector_win_rate": enrichment.get("collector_win_rate"),
+                }
+            )
+            enrichment["default_risk_score"] = _read_value(risk, "default_risk_score")
+            enrichment["risk_confidence"] = _read_value(risk, "risk_confidence")
+            enrichment["plaintiff_strength"] = _read_value(risk, "plaintiff_strength")
+            enrichment["alert_importance"] = _read_value(risk, "alert_importance")
+            print("[court_monitor] risk enrichment complete")
+        except Exception as exc:
+            print(f"[court_monitor] risk enrichment failed: {exc}")
 
     if pattern_detector is None:
         print("[court_monitor] pattern_detector unavailable; skipping")
     elif not historical_cases:
         print("[court_monitor] pattern_detector needs case history; skipping")
     else:
-        print("[court_monitor] pattern_detector available; waiting for B3 integration contract")
+        try:
+            pattern_result = pattern_detector([*historical_cases, result])
+            enrichment["pattern_description"] = _read_value(
+                pattern_result, "pattern_description"
+            )
+            enrichment["pattern_severity"] = _read_value(
+                pattern_result, "pattern_severity"
+            )
+            enrichment["anomaly_score"] = _read_value(pattern_result, "anomaly_score")
+            print("[court_monitor] pattern enrichment complete")
+        except Exception as exc:
+            print(f"[court_monitor] pattern enrichment failed: {exc}")
 
 
 def _load_historical_cases(client: Client, plaintiff: str, county: str) -> list[dict]:

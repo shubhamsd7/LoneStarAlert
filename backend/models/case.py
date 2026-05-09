@@ -31,6 +31,13 @@ class CourtCase(BaseModel):
     days_remaining: int | None = None
     is_time_barred: bool | None = None
     collector_win_rate: float | None = Field(default=None, ge=0, le=1)
+    default_risk_score: float | None = Field(default=None, ge=0, le=1)
+    risk_confidence: float | None = Field(default=None, ge=0, le=1)
+    plaintiff_strength: float | None = Field(default=None, ge=0, le=1)
+    alert_importance: float | None = Field(default=None, ge=0, le=1)
+    pattern_description: str | None = None
+    pattern_severity: Literal["low", "medium", "high"] | None = None
+    anomaly_score: float | None = Field(default=None, ge=0, le=1)
     status: Literal["active", "alerted", "resolved"]
 
 
