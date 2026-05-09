@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from importlib import import_module
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -18,7 +19,7 @@ from backend.agents import case_analyzer, court_monitor
 from backend.models.case import Alert, CourtCase, WatchEntry
 
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 WATCH_ENTRIES_TABLE = "watch_entries"
