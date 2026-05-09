@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Activity, RefreshCw, ShieldCheck } from "lucide-react";
 import type { CaseAlert } from "@/lib/api";
 import AnswerModal from "@/components/AnswerModal";
@@ -8,18 +8,8 @@ import CaseCard from "@/components/CaseCard";
 import { useAlertStore } from "@/store/alertStore";
 
 export default function AlertDashboard() {
-  const { alerts, watches, lastChecked, loading, email, fetchAlerts, checkNow } = useAlertStore();
+  const { alerts, watches, lastChecked, loading, fetchAlerts, checkNow } = useAlertStore();
   const [selectedAlert, setSelectedAlert] = useState<CaseAlert | null>(null);
-
-  useEffect(() => {
-    if (!email) return;
-    void fetchAlerts();
-    const timer = window.setInterval(() => {
-      void fetchAlerts();
-    }, 60000);
-
-    return () => window.clearInterval(timer);
-  }, [email, fetchAlerts]);
 
   const sortedAlerts = useMemo(
     () =>

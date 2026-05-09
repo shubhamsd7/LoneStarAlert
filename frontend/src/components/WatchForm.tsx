@@ -12,12 +12,16 @@ export default function WatchForm() {
   const [value, setValue] = useState("");
   const [county, setCounty] = useState<County>("Harris");
   const [email, setEmail] = useState("");
-  const { createWatch, loading } = useAlertStore();
+  const { addWatch, loading } = useAlertStore();
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await createWatch(type, value.trim(), county, email.trim());
-    setValue("");
+    try {
+      await addWatch(type, value.trim(), county, email.trim());
+      setValue("");
+    } catch {
+      // The store already shows the failure toast.
+    }
   }
 
   return (
