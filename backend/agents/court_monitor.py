@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from supabase import Client, create_client
 
+from backend.layer1_entity.entity_resolver import resolve_entity_sync
 from backend.models.case import CourtCase, WatchEntry
 from backend.services import court_scraper, deadline_calculator
 
@@ -161,6 +162,7 @@ def _build_court_case(
     filing_date = _parse_date(result.get("filing_date")) or date.today()
     court_type = _normalize_court_type(result.get("court_type"))
     deadline = _calculate_deadline(filing_date, court_type)
+    entity = _resolve_entity(result)
     enrichment = _optional_enrichment(
         client,
         watch_entry,
@@ -168,6 +170,7 @@ def _build_court_case(
         filing_date=filing_date,
         court_type=court_type,
         deadline=deadline,
+        entity=entity,
     )
 
     return CourtCase(
@@ -185,6 +188,13 @@ def _build_court_case(
         days_remaining=deadline.get("days_remaining"),
         is_time_barred=enrichment.get("is_time_barred"),
         collector_win_rate=enrichment.get("collector_win_rate"),
+        resolved_entity_id=entity.get("entity_id"),
+        canonical_entity_name=entity.get("canonical_name"),
+        entity_confidence_score=entity.get("confidence_score"),
+        entity_graph={
+            "parent_company": entity.get("parent_company"),
+            "subsidiaries": entity.get("subsidiaries", []),
+        },
         default_risk_score=enrichment.get("default_risk_score"),
         risk_confidence=enrichment.get("risk_confidence"),
         plaintiff_strength=enrichment.get("plaintiff_strength"),
@@ -229,6 +239,7 @@ def _optional_enrichment(
     filing_date: date,
     court_type: str,
     deadline: dict[str, Any],
+    entity: dict[str, Any],
 ) -> dict[str, Any]:
     enrichment: dict[str, Any] = {
         "is_time_barred": None,
@@ -256,6 +267,7 @@ def _optional_enrichment(
         filing_date=filing_date,
         court_type=court_type,
         deadline=deadline,
+        entity=entity,
     )
 
     return enrichment
@@ -328,6 +340,7 @@ def _try_future_layer_enrichment(
     filing_date: date,
     court_type: str,
     deadline: dict[str, Any],
+    entity: dict[str, Any],
 ) -> None:
     risk_scorer = _load_optional_callable("backend.layer2_risk.risk_model", "score_risk")
     pattern_detector = _load_optional_callable(
@@ -342,6 +355,9 @@ def _try_future_layer_enrichment(
             risk = risk_scorer(
                 {
                     **result,
+                    "resolved_entity_id": entity.get("entity_id"),
+                    "canonical_entity_name": entity.get("canonical_name"),
+                    "entity_confidence_score": entity.get("confidence_score"),
                     "filing_date": filing_date,
                     "court_type": court_type,
                     "days_remaining": deadline.get("days_remaining"),
@@ -363,7 +379,17 @@ def _try_future_layer_enrichment(
         print("[court_monitor] pattern_detector needs case history; skipping")
     else:
         try:
-            pattern_result = pattern_detector([*historical_cases, result])
+            pattern_result = pattern_detector(
+                [
+                    *historical_cases,
+                    {
+                        **result,
+                        "resolved_entity_id": entity.get("entity_id"),
+                        "plaintiff": entity.get("canonical_name")
+                        or result.get("plaintiff"),
+                    },
+                ]
+            )
             enrichment["pattern_description"] = _read_value(
                 pattern_result, "pattern_description"
             )
@@ -374,6 +400,28 @@ def _try_future_layer_enrichment(
             print("[court_monitor] pattern enrichment complete")
         except Exception as exc:
             print(f"[court_monitor] pattern enrichment failed: {exc}")
+
+
+def _resolve_entity(result: dict[str, Any]) -> dict[str, Any]:
+    try:
+        entity = resolve_entity_sync(
+            str(result.get("plaintiff") or ""),
+            str(result.get("case_type") or ""),
+        )
+        print(
+            "[court_monitor] entity resolution complete: "
+            f"{entity.get('canonical_name')} ({entity.get('confidence_score')})"
+        )
+        return entity
+    except Exception as exc:
+        print(f"[court_monitor] entity resolution failed: {exc}")
+        return {
+            "entity_id": None,
+            "canonical_name": str(result.get("plaintiff") or ""),
+            "confidence_score": 0.0,
+            "subsidiaries": [],
+            "parent_company": None,
+        }
 
 
 def _load_historical_cases(client: Client, plaintiff: str, county: str) -> list[dict]:

@@ -6,3 +6,4 @@ python-dotenv
 httpx
 pytest
 beautifulsoup4
+mcp
