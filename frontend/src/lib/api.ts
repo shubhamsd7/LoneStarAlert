@@ -81,7 +81,7 @@ type ApiCaseAlert = Partial<CaseAlert> & {
   sent_at?: string;
 };
 
-type AlertResponse = CaseAlert[] | { alerts?: ApiCaseAlert[]; data?: ApiCaseAlert[] };
+type AlertResponse = CaseAlert[] | { alerts?: ApiCaseAlert[]; cases?: ApiCaseAlert[]; data?: ApiCaseAlert[] };
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -177,7 +177,7 @@ function toCaseAlert(alert: ApiCaseAlert): CaseAlert {
 
 function unwrapAlerts(response: AlertResponse): ApiCaseAlert[] {
   if (Array.isArray(response)) return response;
-  return response.alerts ?? response.data ?? [];
+  return response.alerts ?? response.cases ?? response.data ?? [];
 }
 
 export async function createWatch(
