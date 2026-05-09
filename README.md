@@ -9,86 +9,66 @@
 
 TxAlert is an autonomous agent that monitors Texas civil court filings 24/7 and alerts regular Texans before they lose lawsuits by doing nothing.
 
-In Texas, debt collectors win **70% of cases by default** — not because defendants lose on the merits, but because defendants never knew they were sued. A debt collector files a lawsuit, the person is never properly served, the 14-day deadline passes, and a judge enters a default judgment. Bank account frozen. Wages garnished. Credit destroyed. All preventable with a single alert.
-
-TxAlert fixes the information gap. The court filings were always public. Nobody was watching them for regular people.
+In Texas, debt collectors win **70% of cases by default** — not because defendants lose on the merits, but because they never knew they were sued. TxAlert fixes the information gap using 5 technical layers: entity resolution, ML risk prediction, ownership graph traversal, temporal pattern detection, and autonomous alert generation.
 
 ---
 
-## The Problem — By The Numbers
+## The Problem
 
 - **3 million** debt collection lawsuits filed against Texans since 2012
-- **70%** end in default judgment — defendant never showed up
-- **90%** of debt collectors have a lawyer. Most defendants do not.
-- **14 days** — how long a Texas Justice Court defendant has to respond
-- **$0** — what it costs to file an Answer and prevent automatic loss
-- **$198,000** — what a San Marcos homeowner lost to a secret code enforcement judgment he never knew existed
-
-The data to prevent this was always public. No tool was watching it for the people who needed it most.
+- **70%** end in default — defendant never showed up
+- **90%** of debt collectors have a lawyer. Most defendants do not
+- **14 days** to respond in Texas Justice Court before automatic loss
+- **$198,000** — what a San Marcos homeowner lost to a secret judgment
 
 ---
 
-## What TxAlert Builds
-
-### Two Watch Modes — One Product
-
-**Name Watch**
-Enter your name and county. TxAlert monitors Texas Justice Court and civil court filings daily. If a debt collector, city, or anyone else files a lawsuit naming you — you get an alert before your deadline.
-
-**Address Watch**
-Enter your property address. TxAlert monitors court filings cross-referenced against public property records. If a code enforcement action, lien, or civil judgment is filed against your property — you get an alert before you lose by default.
-
-### What the Agent Does Autonomously
+## 5-Layer Technical Architecture
 
 ```
-1. Monitors Harris County + Travis County court filings daily
-2. Cross-references new filings against watched names and addresses
-3. When match found — calculates deadline automatically
-   → Justice Court: 14 days from service
-   → District Court: 20 days + following Monday
-4. Checks statute of limitations automatically
-   → "This debt is from 2019 — past Texas's 4-year limit"
-5. Flags debt collector win rate
-   → "This collector wins 94% of cases where defendants don't respond"
-6. Generates pre-filled Answer form specific to the case type
-7. Connects to nearest free legal aid organization
-8. Updates Miro board with case timeline and action items
-9. Sends follow-up reminder at 7 days, 3 days, 1 day before deadline
+LAYER 0 — Data Ingestion
+  court_scraper.py → Harris + Travis County Odyssey portals ✅ DONE
+  property_lookup.py → TCAD property to owner cross-reference
+
+LAYER 1 — Entity Resolution Engine  
+  entity_resolver.py → fuzzy NLP name matching across variations
+  llc_graph.py → Texas SOS corporate ownership graph traversal
+  Result: "LVNV Funding LLC" = "Resurgent Capital" = 47 subsidiaries
+
+LAYER 2 — Default Risk Model
+  feature_engineer.py → 10-feature vector per case
+  risk_model.py → scikit-learn GradientBoostingClassifier
+  Output: 0-100 probability defendant loses by default
+
+LAYER 3 — Pattern Detection
+  pattern_detector.py → time series anomaly detection on filings
+  Detects: bulk filing days, holiday targeting, ZIP predation
+  Output: anomaly_score + plain English pattern description
+
+LAYER 4 — Alert Generation
+  defense_detector.py → deterministic Texas law rule engine
+  alert_generator.py → plain English alert + Answer form
+  miro_service.py → live visual Miro board per case
 ```
-
----
-
-## Why This Is Original
-
-Every existing tool waits for the person to come to it:
-
-| Tool | What it does | Problem |
-|---|---|---|
-| Texas Law Help | Guides for responding to lawsuits | Only helps people who already know |
-| SoloSuit | Helps file an Answer | Requires you to know you've been sued |
-| Lone Star Legal Aid | Free Answer filing tool | You must already have the case number |
-| Re:SearchTX | Court record search | Built for lawyers, requires registration |
-| Texas Court Notices (Oct 2025) | Automatic notifications | Attorneys only — not regular people |
-
-**TxAlert is the first tool that finds you before you lose.**
-
-Academic confirmation: A2J Lab's 2025 research explicitly states they are *"aware of no other research"* on proactive outreach to debt collection defendants in Texas.
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
+| Component | Technology |
 |---|---|
 | Frontend | Next.js 14 + Tailwind CSS |
-| Backend | FastAPI (Python 3.11) |
-| Database | Supabase (PostgreSQL) |
-| Agent Layer | OpenAI Responses API (gpt-4.1) |
-| Court Data | Harris County Odyssey Portal + Travis County public records |
-| Property Records | TCAD (Travis Central Appraisal District) public API |
-| MCP Server | modelcontextprotocol/python-sdk |
-| Visual Board | Miro REST API + Miro MCP |
-| Alerts | Supabase Realtime + email |
+| Backend | FastAPI Python 3.11 |
+| Database | Supabase PostgreSQL |
+| ML | scikit-learn GradientBoostingClassifier |
+| NLP | spaCy + TF-IDF |
+| Graph | NetworkX |
+| LLM | OpenAI gpt-4.1 (alert text only) |
+| Court Data | Harris + Travis County Odyssey portals |
+| Property | TCAD public API |
+| Corporate | Texas SOS public filings |
+| MCP | modelcontextprotocol/python-sdk |
+| Visual | Miro REST API + Miro MCP |
 
 ---
 
@@ -98,55 +78,66 @@ Academic confirmation: A2J Lab's 2025 research explicitly states they are *"awar
 txalert/
 ├── backend/
 │   ├── agents/
-│   │   ├── court_monitor.py      # Monitors court filings daily
-│   │   ├── case_analyzer.py      # Analyzes case type, deadline, defenses
-│   │   └── alert_generator.py    # Generates plain English alerts + Answer forms
+│   │   ├── court_monitor.py
+│   │   ├── case_analyzer.py
+│   │   └── alert_generator.py
+│   ├── layer1_entity/
+│   │   ├── entity_resolver.py
+│   │   └── llc_graph.py
+│   ├── layer2_risk/
+│   │   ├── feature_engineer.py
+│   │   └── risk_model.py
+│   ├── layer3_patterns/
+│   │   └── pattern_detector.py
 │   ├── services/
-│   │   ├── court_scraper.py      # Queries Harris + Travis court portals
-│   │   ├── property_lookup.py    # TCAD property → owner cross-reference
-│   │   ├── deadline_calculator.py # Calculates response deadlines
-│   │   ├── limitations_checker.py # Checks 4-year statute of limitations
-│   │   ├── legal_aid_finder.py   # Nearest free legal aid by ZIP
-│   │   └── miro_service.py       # Updates Miro board
-│   ├── mcp/
-│   │   └── server.py             # MCP server exposing 6 tools
-│   ├── models/
-│   │   └── case.py               # Case, Alert, WatchEntry data models
-│   └── main.py                   # FastAPI entry point
-├── frontend/
-│   └── src/
-│       ├── components/
-│       │   ├── WatchForm.tsx      # Name/address watch setup
-│       │   ├── AlertDashboard.tsx # Active alerts with deadlines
-│       │   ├── CaseCard.tsx       # Individual case details
-│       │   └── AnswerGenerator.tsx # Pre-filled Answer form
-│       ├── lib/
-│       │   └── api.ts             # API client
-│       └── store/
-│           └── alertStore.ts      # Zustand global state
-├── .agents/
-│   └── skills/
-│       ├── court-monitor.md       # Codex skill: monitoring loop
-│       ├── case-analyzer.md       # Codex skill: case analysis
-│       └── alert-generator.md     # Codex skill: alert generation
-├── docs/
-│   ├── data_schema.md             # Full data models
-│   ├── setup.md                   # Installation guide
-│   └── team.md                    # Team roles and build plan
-├── AGENTS.md                      # Codex navigation guide
-└── README.md                      # This file
+│   │   ├── court_scraper.py         ✅ DONE
+│   │   ├── deadline_calculator.py
+│   │   ├── limitations_checker.py
+│   │   ├── collector_scorer.py
+│   │   ├── property_lookup.py
+│   │   ├── miro_service.py
+│   │   └── legal_aid_finder.py
+│   ├── mcp/server.py
+│   ├── models/case.py               ✅ DONE
+│   └── main.py                      ✅ DONE
+├── frontend/src/
+│   ├── components/
+│   │   ├── WatchForm.tsx
+│   │   ├── AlertDashboard.tsx
+│   │   ├── CaseCard.tsx
+│   │   └── AnswerModal.tsx
+│   ├── lib/api.ts
+│   └── store/alertStore.ts
+├── AGENTS.md
+└── README.md
 ```
 
 ---
 
-## MCP Server Tools
+## Tracks
 
-```python
-watch_name(name: str, county: str)
-# Register a name to watch for civil filings
+**Texas Open Data** — Court records, TCAD property, Texas SOS filings. MCP server + agent skill both shipped = especially competitive.
 
-watch_address(address: str, county: str)
-# Register an address to watch for property actions
+**Agents Track** — Monitors continuously, resolves entities, predicts risk, detects patterns, generates defenses, alerts autonomously. Zero human input required.
+
+---
+
+## Patent Bounty
+
+Entity resolution + default risk prediction algorithm for defendant protection = novel method. Submit deepinvent.ai tonight. $500 cash.
+
+---
+
+## Demo — Sunday
+
+1. Enter name → entity resolver finds all LLC variations
+2. Risk score appears: "87% chance of losing"
+3. Statute check: "Debt from 2019 — may be time-barred"
+4. Pattern: "Collector targets low-income ZIP codes"
+5. Answer form pre-filled and ready
+6. Miro board shows full case intelligence
+
+*"The court system notified lawyers in October 2025. We built the version for everyone else."*
 
 get_active_cases(watch_id: str)
 # Get all open cases for a watched name/address
