@@ -546,6 +546,8 @@ def _case_alert_payload(
         "collectorWinRate": court_case.collector_win_rate,
         "defaultRiskScore": _get_extra(court_case, "default_risk_score"),
         "riskConfidence": _get_extra(court_case, "risk_confidence"),
+        "plaintiffStrength": _get_extra(court_case, "plaintiff_strength"),
+        "alertImportance": _get_extra(court_case, "alert_importance"),
         "pattern": _pattern_payload(court_case),
         "answerText": alert.get("message") if alert else None,
         "miroBoardUrl": alert.get("miro_board_url") if alert else None,
@@ -579,7 +581,7 @@ def _pattern_payload(court_case: CourtCase) -> dict[str, Any] | None:
         return None
 
     return {
-        "severity": "medium",
+        "severity": _get_extra(court_case, "pattern_severity") or "medium",
         "description": description,
         "anomalyScore": _get_extra(court_case, "anomaly_score"),
     }
