@@ -1,6 +1,6 @@
 'use client';
 
-import { ExternalLink, FileText, Scale } from "lucide-react";
+import { AlertTriangle, CalendarDays, Clock3, ExternalLink, FileText, Scale } from "lucide-react";
 import type { CaseAlert } from "@/lib/api";
 import PatternAlert from "@/components/PatternAlert";
 import RiskScoreCard from "@/components/RiskScoreCard";
@@ -11,7 +11,7 @@ interface CaseCardProps {
 }
 
 const urgencyStyles: Record<CaseAlert["urgency"], string> = {
-  CRITICAL: "border-red-400/50 bg-red-500/15 text-red-100",
+  CRITICAL: "border-red-400/50 bg-red-500/15 text-red-100 shadow-[0_0_30px_rgba(248,113,113,0.12)]",
   URGENT: "border-orange-300/50 bg-orange-500/15 text-orange-100",
   WARNING: "border-yellow-300/50 bg-yellow-500/15 text-yellow-100",
   MONITOR: "border-sky-300/40 bg-sky-500/15 text-sky-100",
@@ -22,26 +22,51 @@ function money(amount: number | null) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(amount);
 }
 
+function countdownLabel(daysRemaining: number | null) {
+  if (daysRemaining == null) return "Deadline pending";
+  if (daysRemaining < 0) return `${Math.abs(daysRemaining)} days past`;
+  if (daysRemaining === 0) return "Due today";
+  if (daysRemaining === 1) return "1 day left";
+  return `${daysRemaining} days left`;
+}
+
+function collectorRate(value?: number | null) {
+  if (value == null) return "Unknown";
+  const percent = value <= 1 ? value * 100 : value;
+  return `${Math.round(percent)}%`;
+}
+
 export default function CaseCard({ alert, onAnswer }: CaseCardProps) {
+  const legalAidUrl = alert.legalAid?.find((resource) => resource.url)?.url ?? "https://texaslawhelp.org";
+
   return (
-    <div className="rounded-lg border border-white/10 bg-zinc-950/80 p-4 shadow-lg">
+    <article className="rounded-lg border border-white/10 bg-[#0F0F0F] p-4 shadow-lg">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-mono text-lg font-semibold text-white">{alert.caseNumber}</h3>
             {alert.pattern ? (
-              <span className="rounded bg-alert/20 px-2 py-1 text-xs font-semibold text-red-100">Pattern</span>
+              <span className="inline-flex items-center gap-1 rounded bg-[#FF4444]/20 px-2 py-1 text-xs font-semibold text-red-100">
+                <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+                Pattern
+              </span>
             ) : null}
           </div>
-          <p className="mt-1 text-sm text-zinc-400">
-            Filed {alert.filingDate} in {alert.county} County
-          </p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-400">
+            <span className="inline-flex items-center gap-1">
+              <CalendarDays className="h-4 w-4" aria-hidden="true" />
+              Filed {alert.filingDate || "date pending"}
+            </span>
+            <span>{alert.county} County</span>
+          </div>
         </div>
         <div className={`rounded-md border px-3 py-2 text-right ${urgencyStyles[alert.urgency]}`}>
-          <p className="text-xs font-semibold uppercase">{alert.urgency}</p>
+          <p className="flex items-center justify-end gap-1 text-xs font-semibold uppercase">
+            <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
+            {alert.urgency}
+          </p>
           <p className="text-2xl font-semibold">
-            {alert.daysRemaining == null ? "--" : alert.daysRemaining}
-            <span className="ml-1 text-xs font-medium">days</span>
+            {countdownLabel(alert.daysRemaining)}
           </p>
         </div>
       </div>
@@ -54,11 +79,11 @@ export default function CaseCard({ alert, onAnswer }: CaseCardProps) {
             <Info label="Deadline" value={alert.deadlineDate ?? "Not calculated yet"} />
             <Info
               label="Collector win rate"
-              value={alert.collectorWinRate == null ? "Unknown" : `${Math.round(alert.collectorWinRate * 100)}%`}
+              value={collectorRate(alert.collectorWinRate)}
             />
           </div>
           {alert.limitationsStatus ? (
-            <div className="rounded-md border border-white/10 bg-white/5 p-3 text-sm text-zinc-300">
+            <div className="rounded-md border border-white/10 bg-white/[0.04] p-3 text-sm text-zinc-300">
               <span className="font-semibold text-zinc-100">Limitations: </span>
               {alert.limitationsStatus}
             </div>
@@ -75,13 +100,13 @@ export default function CaseCard({ alert, onAnswer }: CaseCardProps) {
           <button
             type="button"
             onClick={() => onAnswer(alert)}
-            className="flex h-11 w-full items-center justify-center gap-2 rounded-md bg-alert px-4 text-sm font-semibold text-white hover:bg-red-500"
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#FF4444] px-4 text-sm font-semibold text-white hover:bg-red-500"
           >
             <FileText className="h-4 w-4" aria-hidden="true" />
             Get Answer Form
           </button>
           <a
-            href="https://texaslawhelp.org"
+            href={legalAidUrl}
             target="_blank"
             rel="noreferrer"
             className="flex h-11 w-full items-center justify-center gap-2 rounded-md border border-white/10 px-4 text-sm font-semibold text-zinc-100 hover:bg-white/10"
@@ -102,13 +127,13 @@ export default function CaseCard({ alert, onAnswer }: CaseCardProps) {
           ) : null}
         </div>
       </div>
-    </div>
+    </article>
   );
 }
 
 function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-white/10 bg-white/5 p-3">
+    <div className="rounded-md border border-white/10 bg-white/[0.04] p-3">
       <p className="text-xs font-semibold uppercase tracking-[0.12em] text-zinc-500">{label}</p>
       <p className="mt-1 text-sm font-medium text-zinc-100">{value}</p>
     </div>
