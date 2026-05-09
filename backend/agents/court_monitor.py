@@ -10,6 +10,7 @@ import asyncio
 import os
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
+from importlib import import_module
 from typing import Any
 from uuid import uuid4
 
@@ -67,7 +68,7 @@ async def run_monitor_cycle() -> list[CourtCase]:
                     print(f"[court_monitor] skipping duplicate case {case_number}")
                     continue
 
-                court_case = _build_court_case(watch_entry, result)
+                court_case = _build_court_case(client, watch_entry, result)
                 _save_court_case(client, court_case)
                 new_cases.append(court_case)
                 print(f"[court_monitor] saved new case {court_case.case_number}")
@@ -100,14 +101,35 @@ def _get_supabase_client() -> Client:
 
 
 def _load_watch_entries(client: Client) -> list[WatchEntry]:
-    response = (
-        client.table(WATCH_ENTRIES_TABLE)
-        .select("*")
-        .limit(MAX_WATCH_ENTRIES_PER_CYCLE)
-        .execute()
-    )
+    try:
+        response = (
+            client.table(WATCH_ENTRIES_TABLE)
+            .select("*")
+            .eq("status", "active")
+            .limit(MAX_WATCH_ENTRIES_PER_CYCLE)
+            .execute()
+        )
+    except Exception as exc:
+        print(f"[court_monitor] active watch query failed, falling back: {exc}")
+        response = (
+            client.table(WATCH_ENTRIES_TABLE)
+            .select("*")
+            .limit(MAX_WATCH_ENTRIES_PER_CYCLE)
+            .execute()
+        )
 
-    return [WatchEntry.model_validate(item) for item in response.data or []]
+    watch_entries: list[WatchEntry] = []
+    for item in response.data or []:
+        if isinstance(item, dict) and item.get("status", "active") != "active":
+            continue
+
+        try:
+            watch_entries.append(WatchEntry.model_validate(item))
+        except Exception as exc:
+            watch_id = item.get("id", "unknown") if isinstance(item, dict) else "unknown"
+            print(f"[court_monitor] skipping invalid watch entry {watch_id}: {exc}")
+
+    return watch_entries
 
 
 async def _search_watch_entry(watch_entry: WatchEntry) -> list[dict]:
@@ -133,9 +155,13 @@ def _case_exists(client: Client, case_number: str) -> bool:
     return bool(response.data)
 
 
-def _build_court_case(watch_entry: WatchEntry, result: dict[str, Any]) -> CourtCase:
+def _build_court_case(
+    client: Client, watch_entry: WatchEntry, result: dict[str, Any]
+) -> CourtCase:
     filing_date = _parse_date(result.get("filing_date")) or date.today()
-    deadline = _calculate_deadline(filing_date, result.get("court_type"))
+    court_type = _normalize_court_type(result.get("court_type"))
+    deadline = _calculate_deadline(filing_date, court_type)
+    enrichment = _optional_enrichment(client, watch_entry, result)
 
     return CourtCase(
         id=str(uuid4()),
@@ -144,12 +170,14 @@ def _build_court_case(watch_entry: WatchEntry, result: dict[str, Any]) -> CourtC
         plaintiff=str(result.get("plaintiff") or "Unknown plaintiff"),
         defendant=str(result.get("defendant") or watch_entry.value),
         filing_date=filing_date,
-        court_type=_normalize_court_type(result.get("court_type")),
+        court_type=court_type,
         county=watch_entry.county,
         case_type=str(result.get("case_type") or "Civil"),
         amount_claimed=_parse_decimal(result.get("amount_claimed")),
         deadline_date=deadline.get("deadline_date"),
         days_remaining=deadline.get("days_remaining"),
+        is_time_barred=enrichment.get("is_time_barred"),
+        collector_win_rate=enrichment.get("collector_win_rate"),
         status="active",
     )
 
@@ -169,12 +197,162 @@ def _calculate_deadline(filing_date: date, court_type: Any) -> dict[str, Any]:
         return {
             "deadline_date": _parse_date(result.get("deadline_date")),
             "days_remaining": result.get("days_remaining"),
+            "urgency_level": result.get("urgency_level") or result.get("urgency"),
         }
 
     return {
         "deadline_date": _parse_date(getattr(result, "deadline_date", None)),
         "days_remaining": getattr(result, "days_remaining", None),
+        "urgency_level": getattr(result, "urgency_level", None)
+        or getattr(result, "urgency", None),
     }
+
+
+def _optional_enrichment(
+    client: Client, watch_entry: WatchEntry, result: dict[str, Any]
+) -> dict[str, Any]:
+    enrichment: dict[str, Any] = {
+        "is_time_barred": None,
+        "collector_win_rate": None,
+    }
+
+    _try_limitations_enrichment(enrichment, result)
+    historical_cases = _load_historical_cases(
+        client,
+        plaintiff=str(result.get("plaintiff") or ""),
+        county=watch_entry.county,
+    )
+    _try_collector_enrichment(enrichment, result, historical_cases)
+    _try_future_layer_enrichment(result, historical_cases)
+
+    return enrichment
+
+
+def _try_limitations_enrichment(
+    enrichment: dict[str, Any], result: dict[str, Any]
+) -> None:
+    debt_origin_date = _parse_date(
+        result.get("debt_origin_date")
+        or result.get("debt_date")
+        or result.get("last_payment_date")
+    )
+    if debt_origin_date is None:
+        return
+
+    checker = _load_optional_callable(
+        "backend.services.limitations_checker",
+        "check_statute_of_limitations",
+    )
+    if checker is None:
+        print("[court_monitor] limitations_checker unavailable; skipping")
+        return
+
+    try:
+        limitations = checker(
+            debt_origin_date,
+            str(result.get("debt_type") or "unknown"),
+            _parse_date(result.get("last_payment_date")),
+        )
+        enrichment["is_time_barred"] = _read_value(limitations, "is_time_barred")
+        print("[court_monitor] limitations enrichment complete")
+    except Exception as exc:
+        print(f"[court_monitor] limitations enrichment failed: {exc}")
+
+
+def _try_collector_enrichment(
+    enrichment: dict[str, Any], result: dict[str, Any], historical_cases: list[dict]
+) -> None:
+    if not historical_cases:
+        print("[court_monitor] no collector history available; skipping")
+        return
+
+    scorer = _load_optional_callable(
+        "backend.services.collector_scorer",
+        "score_collector",
+    )
+    if scorer is None:
+        print("[court_monitor] collector_scorer unavailable; skipping")
+        return
+
+    try:
+        plaintiff_name = str(result.get("plaintiff") or "")
+        profile = scorer(plaintiff_name, historical_cases)
+
+        enrichment["collector_win_rate"] = _read_value(
+            profile,
+            "default_win_rate",
+            "win_rate",
+        )
+        print("[court_monitor] collector enrichment complete")
+    except Exception as exc:
+        print(f"[court_monitor] collector enrichment failed: {exc}")
+
+
+def _try_future_layer_enrichment(
+    result: dict[str, Any], historical_cases: list[dict]
+) -> None:
+    risk_scorer = _load_optional_callable("backend.layer2_risk.risk_model", "score_risk")
+    pattern_detector = _load_optional_callable(
+        "backend.layer3_patterns.pattern_detector",
+        "detect_patterns",
+    )
+
+    if risk_scorer is None:
+        print("[court_monitor] risk_model unavailable; skipping")
+    else:
+        print("[court_monitor] risk_model available; waiting for B3 integration contract")
+
+    if pattern_detector is None:
+        print("[court_monitor] pattern_detector unavailable; skipping")
+    elif not historical_cases:
+        print("[court_monitor] pattern_detector needs case history; skipping")
+    else:
+        print("[court_monitor] pattern_detector available; waiting for B3 integration contract")
+
+
+def _load_historical_cases(client: Client, plaintiff: str, county: str) -> list[dict]:
+    if not plaintiff:
+        return []
+
+    try:
+        response = (
+            client.table(COURT_CASES_TABLE)
+            .select("*")
+            .eq("plaintiff", plaintiff)
+            .eq("county", county)
+            .limit(100)
+            .execute()
+        )
+        return response.data or []
+    except Exception as exc:
+        print(f"[court_monitor] failed to load collector history: {exc}")
+        return []
+
+
+def _load_optional_callable(module_name: str, callable_name: str) -> Any | None:
+    try:
+        module = import_module(module_name)
+    except ModuleNotFoundError:
+        return None
+    except Exception as exc:
+        print(f"[court_monitor] optional module {module_name} failed to load: {exc}")
+        return None
+
+    candidate = getattr(module, callable_name, None)
+    if callable(candidate):
+        return candidate
+
+    return None
+
+
+def _read_value(source: Any, *names: str) -> Any:
+    for name in names:
+        if isinstance(source, dict) and name in source:
+            return source[name]
+        if hasattr(source, name):
+            return getattr(source, name)
+
+    return None
 
 
 def _save_court_case(client: Client, court_case: CourtCase) -> None:
