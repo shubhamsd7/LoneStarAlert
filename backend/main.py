@@ -201,6 +201,8 @@ async def _process_new_case_alert(client: Client, court_case: CourtCase) -> None
         frame_url = await _create_miro_board(court_case, alert)
 
         if frame_url:
+            alert.miro_board_url = frame_url
+            _save_miro_board_url(client, alert.id, frame_url)
             print(
                 f"[background] Miro board created for {court_case.case_number}: {frame_url}"
             )
@@ -257,10 +259,24 @@ def _fallback_alert(court_case: CourtCase, analysis: dict[str, Any]) -> Alert:
 
 def _save_alert(client: Client, alert: Alert) -> None:
     try:
-        client.table(ALERTS_TABLE).insert(alert.model_dump(mode="json")).execute()
+        client.table(ALERTS_TABLE).insert(
+            alert.model_dump(mode="json", exclude_none=True)
+        ).execute()
         print(f"[background] saved alert {alert.id} for case {alert.case_id}")
     except Exception as exc:
         print(f"[background] failed to save alert {alert.id}: {exc}")
+
+
+def _save_miro_board_url(client: Client, alert_id: str, frame_url: str) -> None:
+    try:
+        (
+            client.table(ALERTS_TABLE)
+            .update({"miro_board_url": frame_url})
+            .eq("id", alert_id)
+            .execute()
+        )
+    except Exception as exc:
+        print(f"[background] failed to save Miro URL for alert {alert_id}: {exc}")
 
 
 def _alert_exists(client: Client, case_id: str) -> bool:

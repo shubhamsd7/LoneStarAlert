@@ -50,5 +50,6 @@ class Alert(BaseModel):
     case_id: str
     message: str
     answer_form_url: str | None = None
+    miro_board_url: str | None = None
     legal_aid: list[dict[str, Any]] = Field(default_factory=list)
     sent_at: datetime
