@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
+from importlib import import_module
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -12,8 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from supabase import Client
 
-from backend.agents import court_monitor
-from backend.models.case import CourtCase, WatchEntry
+from backend.agents import case_analyzer, court_monitor
+from backend.models.case import Alert, CourtCase, WatchEntry
 
 
 load_dotenv()
@@ -22,6 +24,10 @@ load_dotenv()
 WATCH_ENTRIES_TABLE = "watch_entries"
 COURT_CASES_TABLE = "court_cases"
 ALERTS_TABLE = "alerts"
+MONITOR_INTERVAL_SECONDS = 86400
+
+
+background_monitor_task: asyncio.Task | None = None
 
 
 app = FastAPI(
@@ -141,7 +147,67 @@ async def delete_watch_frontend_alias(watch_id: str) -> DeleteWatchResponse:
 @app.get("/health")
 async def health() -> dict[str, str]:
     """Basic health check for demos and uptime probes."""
-    return {"status": "ok", "monitor": "running"}
+    monitor_state = (
+        "running"
+        if background_monitor_task and not background_monitor_task.done()
+        else "stopped"
+    )
+    return {"status": "ok", "monitor": monitor_state}
+
+
+@app.on_event("startup")
+async def start_background_monitor() -> None:
+    """Start the daily monitor loop when FastAPI starts."""
+    global background_monitor_task
+
+    if background_monitor_task and not background_monitor_task.done():
+        return
+
+    background_monitor_task = asyncio.create_task(_daily_monitor_loop())
+    print("[background] daily monitor task scheduled")
+
+
+async def _daily_monitor_loop() -> None:
+    """Run monitor, analysis, alerts, and Miro updates every 24 hours."""
+    while True:
+        cycle_started_at = datetime.now(timezone.utc)
+        print(f"[background] cycle started at {cycle_started_at.isoformat()}")
+
+        try:
+            client = court_monitor._get_supabase_client()
+            new_cases = await court_monitor.run_monitor_cycle()
+            print(f"[background] monitor found {len(new_cases)} new case(s)")
+
+            for court_case in new_cases:
+                await _process_new_case_alert(client, court_case)
+        except Exception as exc:
+            print(f"[background] cycle failed: {exc}")
+
+        cycle_ended_at = datetime.now(timezone.utc)
+        print(f"[background] cycle ended at {cycle_ended_at.isoformat()}")
+        await asyncio.sleep(MONITOR_INTERVAL_SECONDS)
+
+
+async def _process_new_case_alert(client: Client, court_case: CourtCase) -> None:
+    """Analyze a case, generate an alert, save it, and update Miro if possible."""
+    try:
+        if _alert_exists(client, court_case.id):
+            print(f"[background] alert already exists for {court_case.case_number}")
+            return
+
+        analysis = case_analyzer.analyze_case(court_case)
+        alert = _generate_alert(court_case, analysis)
+        _save_alert(client, alert)
+        frame_url = await _create_miro_board(court_case, alert)
+
+        if frame_url:
+            print(
+                f"[background] Miro board created for {court_case.case_number}: {frame_url}"
+            )
+
+        _log_email_alert(court_case, alert)
+    except Exception as exc:
+        print(f"[background] alert pipeline failed for {court_case.case_number}: {exc}")
 
 
 def _get_client_or_503() -> Client:
@@ -152,6 +218,103 @@ def _get_client_or_503() -> Client:
             status_code=503,
             detail=f"Supabase is not configured: {exc}",
         ) from exc
+
+
+def _generate_alert(court_case: CourtCase, analysis: dict[str, Any]) -> Alert:
+    generator = _load_optional_callable(
+        "backend.agents.alert_generator",
+        "generate_alert",
+    )
+
+    if generator is not None:
+        try:
+            generated = generator(court_case, analysis)
+            if isinstance(generated, Alert):
+                return generated
+            if isinstance(generated, dict):
+                return Alert.model_validate(generated)
+        except Exception as exc:
+            print(f"[background] alert_generator failed, using fallback: {exc}")
+
+    return _fallback_alert(court_case, analysis)
+
+
+def _fallback_alert(court_case: CourtCase, analysis: dict[str, Any]) -> Alert:
+    message = analysis.get("plain_language_summary") or (
+        f"{court_case.plaintiff} filed case {court_case.case_number}. "
+        "Check the deadline and contact legal aid."
+    )
+
+    return Alert(
+        id=str(uuid4()),
+        case_id=court_case.id,
+        message=str(message),
+        answer_form_url=None,
+        legal_aid=[],
+        sent_at=datetime.now(timezone.utc),
+    )
+
+
+def _save_alert(client: Client, alert: Alert) -> None:
+    try:
+        client.table(ALERTS_TABLE).insert(alert.model_dump(mode="json")).execute()
+        print(f"[background] saved alert {alert.id} for case {alert.case_id}")
+    except Exception as exc:
+        print(f"[background] failed to save alert {alert.id}: {exc}")
+
+
+def _alert_exists(client: Client, case_id: str) -> bool:
+    try:
+        response = (
+            client.table(ALERTS_TABLE)
+            .select("id")
+            .eq("case_id", case_id)
+            .limit(1)
+            .execute()
+        )
+        return bool(response.data)
+    except Exception as exc:
+        print(f"[background] failed to check existing alerts: {exc}")
+        return False
+
+
+async def _create_miro_board(court_case: CourtCase, alert: Alert) -> str:
+    create_case_board = _load_optional_callable(
+        "backend.services.miro_service",
+        "create_case_board",
+    )
+    if create_case_board is None:
+        print("[background] miro_service unavailable; skipping board update")
+        return ""
+
+    try:
+        result = create_case_board(court_case, alert)
+        if hasattr(result, "__await__"):
+            result = await result
+        return str(result or "")
+    except Exception as exc:
+        print(f"[background] Miro update failed: {exc}")
+        return ""
+
+
+def _log_email_alert(court_case: CourtCase, alert: Alert) -> None:
+    print(
+        "[email-log] "
+        f"case={court_case.case_number} alert={alert.id} message={alert.message}"
+    )
+
+
+def _load_optional_callable(module_name: str, callable_name: str) -> Any | None:
+    try:
+        module = import_module(module_name)
+    except ModuleNotFoundError:
+        return None
+    except Exception as exc:
+        print(f"[background] optional module {module_name} failed to load: {exc}")
+        return None
+
+    candidate = getattr(module, callable_name, None)
+    return candidate if callable(candidate) else None
 
 
 def _save_watch_entry(client: Client, request: WatchRequest) -> WatchEntry:
