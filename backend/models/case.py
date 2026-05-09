@@ -31,6 +31,10 @@ class CourtCase(BaseModel):
     days_remaining: int | None = None
     is_time_barred: bool | None = None
     collector_win_rate: float | None = Field(default=None, ge=0, le=1)
+    resolved_entity_id: str | None = None
+    canonical_entity_name: str | None = None
+    entity_confidence_score: float | None = Field(default=None, ge=0, le=1)
+    entity_graph: dict[str, Any] | None = None
     default_risk_score: float | None = Field(default=None, ge=0, le=1)
     risk_confidence: float | None = Field(default=None, ge=0, le=1)
     plaintiff_strength: float | None = Field(default=None, ge=0, le=1)
