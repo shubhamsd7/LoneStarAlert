@@ -8,7 +8,12 @@ interface PatternAlertProps {
   anomalyScore?: number;
 }
 
-export default function PatternAlert({ description, severity }: PatternAlertProps) {
+function percentValue(value: number) {
+  const normalized = value <= 1 ? value * 100 : value;
+  return Math.max(0, Math.min(100, Math.round(normalized)));
+}
+
+export default function PatternAlert({ anomalyScore, description, severity }: PatternAlertProps) {
   if (!description || !severity) return null;
 
   const color =
@@ -28,6 +33,11 @@ export default function PatternAlert({ description, severity }: PatternAlertProp
         </span>
       </div>
       <p className="mt-2 text-sm leading-5 opacity-90">{description}</p>
+      {anomalyScore != null ? (
+        <p className="mt-2 text-xs font-medium opacity-75">
+          Pattern score {percentValue(anomalyScore)}%
+        </p>
+      ) : null}
     </div>
   );
 }
